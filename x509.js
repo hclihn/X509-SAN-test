@@ -471,7 +471,7 @@ function asn1_read(buf) {
     pointer = lp[1];
 
     if ((pointer + length) > buf.length)
-       throw `length (${length}) exceeds buffer (${buf.length}) side: ${pointer}`;
+       throw `length (${length}) exceeds buffer (${buf.length}) side: ${pointer}, ${buf.slice(0, pointer).toString('hex')}`;
 
     if (is_constructed) {
       a.push(asn1_read(buf.slice(pointer, pointer + length)));
@@ -559,16 +559,64 @@ function get_oid_value(cert, oid) {
  * @param  {string} pem - The PEM string to be parsed.
  * @return {CertType} The parsed certificate in a multi-level array.
  *   Values are in strings or numbers.
+ * @throws {Error} If the PEM string is not a valid X.509 certificate.
  */
 function parse_pem_cert(pem) {
   var der = pem.split(/\n/);
 
-  if (pem.match('CERTIFICATE')) {
-    der = der.slice(1, -2);
+  if (pem.match(' CERTIFICATE-')) {
+    var start = -1, end = -1;
+    for (let i = 0; i < der.length; i++) {
+      if (der[i].match('-----BEGIN CERTIFICATE-----')) {
+        start = i+1;
+      } else if (der[i].match('-----END CERTIFICATE-----')) {
+        end = i;
+        break;
+      }
+    }
+    if (start < 0 || end <= start) {
+      throw `Invalid PEM certificate: failed to locate start and/or end of certificate`;
+    }
+    der = der.slice(start, end);
   }
 
   return asn1_read(Buffer.from(der.join(''), 'base64'));
 }
 
-export default {asn1_read, parse_pem_cert, is_oid_exist, get_oid_value, get_oid_value_all};
+/**
+ * Get subjectAltName (SAN) from X.509 PEM certificate.
+ * @param  {string} pem_cert - The PEM string to be parsed.
+ * @return {string[]} The array of SANs.
+ * @throws {Error} If pem_cert is empty.
+ */
+function get_san(pem_cert) {
+  if (!pem_cert) {
+    throw 'empty client PEM certificate';
+  }
+
+  var cert = parse_pem_cert(pem_cert);
+  console.log(JSON.stringify(cert, null, 2));
+  // subjectAltName oid 2.5.29.17
+  // return JSON.stringify(x509.get_oid_value(cert, "2.5.29.17")[0]);
+  return get_oid_value(cert, "2.5.29.17")[0];
+}
+
+/**
+ * Converts HTTP header value to the PEM string.
+ * @param  {string} header - The HTTP header value containing the certificate.
+ * @return {string} The PEM certificate string.
+ */
+function header2pem(header) {
+  let pem = header.replace(/(BEGIN|END) (CERT)/g, '\$1#\$2');
+  pem = pem.replace(/ /g, '\n').replace(/#/g, ' ');
+
+  if (pem[-1] != '\n') {
+    pem += '\n'
+  }
+  
+  return pem;
+}
+
+export default {asn1_read, parse_pem_cert, is_oid_exist, get_oid_value, 
+                get_oid_value_all, get_san, header2pem};
   
